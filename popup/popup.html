@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diplomacy Advisor Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 300px;
+      background: #1a1f2e;
+      color: #e8eaf0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      padding: 0;
+    }
+
+    header {
+      background: #252c42;
+      padding: 12px 16px;
+      border-bottom: 1px solid #3a4060;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    header h1 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #c9a84c;
+      letter-spacing: 0.4px;
+      text-transform: uppercase;
+    }
+
+    .icon {
+      font-size: 18px;
+    }
+
+    main {
+      padding: 14px 16px;
+    }
+
+    .field-group {
+      margin-bottom: 14px;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #5a6080;
+      font-weight: 600;
+      margin-bottom: 5px;
+    }
+
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      padding: 7px 10px;
+      background: #202638;
+      border: 1px solid #3a4060;
+      border-radius: 5px;
+      color: #e8eaf0;
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus {
+      border-color: #c9a84c;
+    }
+
+    .hint {
+      font-size: 11px;
+      color: #4a5070;
+      margin-top: 4px;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    button {
+      flex: 1;
+      padding: 8px;
+      border: none;
+      border-radius: 5px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, background 0.15s;
+    }
+
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #save-btn {
+      background: #c9a84c;
+      color: #1a1f2e;
+    }
+    #save-btn:hover:not(:disabled) { background: #e0bf60; }
+
+    #test-btn {
+      background: #2e3450;
+      color: #9aa0b8;
+      border: 1px solid #3a4060;
+    }
+    #test-btn:hover:not(:disabled) {
+      background: #3a4060;
+      color: #e8eaf0;
+    }
+
+    #status {
+      padding: 9px 12px;
+      border-radius: 5px;
+      font-size: 12px;
+      display: none;
+    }
+
+    #status.ok {
+      display: block;
+      background: #1a2e1a;
+      border: 1px solid #2a5a2a;
+      color: #80c880;
+    }
+
+    #status.error {
+      display: block;
+      background: #2e1a1a;
+      border: 1px solid #5a2a2a;
+      color: #f08080;
+      white-space: pre-wrap;
+    }
+
+    #status.info {
+      display: block;
+      background: #1e2436;
+      border: 1px solid #3a4060;
+      color: #7a82a0;
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #2e3450;
+      margin: 14px 0;
+    }
+
+    .models-label {
+      font-size: 11px;
+      color: #4a5070;
+      margin-bottom: 6px;
+    }
+
+    #model-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    .model-chip {
+      background: #202638;
+      border: 1px solid #3a4060;
+      border-radius: 12px;
+      padding: 2px 9px;
+      font-size: 11px;
+      color: #7a82a0;
+      cursor: pointer;
+      font-family: 'Courier New', monospace;
+    }
+
+    .model-chip:hover {
+      border-color: #c9a84c;
+      color: #c9a84c;
+    }
+
+    footer {
+      padding: 8px 16px 10px;
+      font-size: 10px;
+      color: #3a4060;
+      text-align: center;
+      border-top: 1px solid #252c42;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="icon">⚔️</span>
+    <h1>Diplomacy Advisor</h1>
+  </header>
+
+  <main>
+    <div class="field-group">
+      <label for="model-input">Ollama Model</label>
+      <input type="text" id="model-input" placeholder="llama3.2" autocomplete="off" spellcheck="false">
+      <div class="hint">e.g. llama3.2, mistral, deepseek-r1:8b</div>
+    </div>
+
+    <div class="field-group">
+      <label for="port-input">Ollama Port</label>
+      <input type="number" id="port-input" placeholder="11434" min="1" max="65535">
+      <div class="hint">Default is 11434</div>
+    </div>
+
+    <div class="btn-row">
+      <button id="save-btn">Save</button>
+      <button id="test-btn">Test Connection</button>
+    </div>
+
+    <div id="status"></div>
+
+    <hr class="divider" id="models-divider" style="display:none">
+
+    <div id="models-container" style="display:none">
+      <div class="models-label">Available models (click to use):</div>
+      <div id="model-list"></div>
+    </div>
+  </main>
+
+  <footer>
+    Overlay on backstabbr.com/game/* &nbsp;·&nbsp; Alt+D to toggle
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
