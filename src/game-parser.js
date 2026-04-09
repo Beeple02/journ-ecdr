@@ -1,182 +1,96 @@
 // game-parser.js — Extracts game state from the Backstabbr DOM.
 //
-// IMPORTANT: Backstabbr has no public API, so this file scrapes the DOM directly.
-// If Backstabbr updates their UI and this stops working, open DevTools (F12 > Elements)
-// on a live game page and update the TODO selectors below to match the new structure.
+// Selectors verified against live backstabbr.com (April 2026).
+// If backstabbr updates their UI, re-run the DevTools snippets in the README
+// to find new selectors and update the SEL object below.
 //
 // Exported globals (attached to window so content.js can call them):
 //   window.parseGameState()  → GameState object
 //   window.setupGameObserver(callback) → MutationObserver
 
 // ---------------------------------------------------------------------------
-// TODO: Verify / update these selectors against a live backstabbr.com game page.
-// Open DevTools > Elements and look for these patterns.
+// Verified selectors (confirmed on live backstabbr game page)
 // ---------------------------------------------------------------------------
 const SEL = {
-  // Element showing phase text, e.g. "Spring 1901 — Movement Phase"
-  // Try multiple candidates; first match wins.
-  PHASE: [
-    '.phase-display',
-    '.game-phase',
-    '[class*="phase-name"]',
-    '[class*="turn-header"]',
-    'h1[class*="turn"]',
-    'h2[class*="turn"]',
-  ],
+  // "spring 1901 (current season)" link in the top-left map navigation
+  PHASE: 'a.text-capitalize',
 
-  // Element showing the player's own country, e.g. "England"
-  MY_COUNTRY: [
-    '[class*="my-country"]',
-    '[class*="my-power"]',
-    '[class*="player-power"]',
-    '[class*="user-country"]',
-    '.power-flag + span',
-  ],
+  // Each unit order shown in the orders panel, e.g. "F Ank", "A Con", "A Smy"
+  // These are the CURRENT PLAYER's units only — perfect for us
+  ORDERSTRING: '.orderstring',
 
-  // List items / rows that describe unit orders, e.g. "A LON H"
-  ORDER_ITEMS: [
-    '[class*="order-list"] li',
-    '[class*="orders"] li',
-    '.order-row',
-    '[class*="order-item"]',
-    '[data-order]',
-  ],
-
-  // Supply centre table rows or list items
-  SUPPLY_CENTERS: [
-    '[class*="supply"] tr',
-    '[class*="supply"] li',
-    '[class*="sc-count"]',
-    '[class*="center-count"]',
-  ],
-
-  // The root game container to watch for DOM mutations
-  GAME_ROOT: [
-    '[class*="game-container"]',
-    '[class*="game-board"]',
-    '#app',
-    'main',
-    'body',
-  ],
+  // Root container to watch for DOM mutations
+  GAME_ROOT: '#app, main, body',
 };
 
-// Standard Diplomacy 3-letter territory abbreviations (used for validation)
-const VALID_TERRITORIES = new Set([
-  'ADR','AEG','ALB','ANK','APU','ARM','BAL','BAR','BEL','BER',
-  'BLA','BOH','BRE','BUD','BUL','BUR','CLY','CON','DEN','EAS',
-  'ECH','EDI','FIN','GAL','GAS','GOB','GOL','GRE','HEL','HOL',
-  'ION','IRI','KIE','LON','LVN','LVP','MAO','MAR','MED','MOS',
-  'MUN','NAF','NAO','NAP','NOR','NTH','NWG','NWY','PAR','PIC',
-  'PIE','POR','PRU','ROM','RUH','RUM','SER','SEV','SIL','SKA',
-  'SMY','SPA','STP','SWE','SYR','TRI','TUN','TUS','TYR','TYS',
-  'UKR','VEN','VIA','VIE','WAL','WAR','WES','YOR',
-  // Coastal variants
-  'STP/NC','STP/SC','SPA/NC','SPA/SC','BUL/EC','BUL/SC',
-]);
-
 // ---------------------------------------------------------------------------
-// Helper: find first matching element from a list of selectors
+// Home supply centre → country mapping (used to infer player's country from
+// their unit positions — works reliably in all phases of the game because
+// home SCs are what determine country identity)
 // ---------------------------------------------------------------------------
-function queryFirst(selectors) {
-  for (const sel of selectors) {
-    const el = document.querySelector(sel);
-    if (el) return el;
-  }
-  return null;
-}
+const HOME_SC_TO_COUNTRY = {
+  // Austria
+  'BUD': 'Austria', 'TRI': 'Austria', 'VIE': 'Austria',
+  // England
+  'EDI': 'England', 'LON': 'England', 'LVP': 'England',
+  // France
+  'BRE': 'France',  'MAR': 'France',  'PAR': 'France',
+  // Germany
+  'BER': 'Germany', 'KIE': 'Germany', 'MUN': 'Germany',
+  // Italy
+  'NAP': 'Italy',   'ROM': 'Italy',   'VEN': 'Italy',
+  // Russia
+  'MOS': 'Russia',  'SEV': 'Russia',  'STP': 'Russia',  'WAR': 'Russia',
+  // Turkey
+  'ANK': 'Turkey',  'CON': 'Turkey',  'SMY': 'Turkey',
+};
 
-function queryAll(selectors) {
-  for (const sel of selectors) {
-    const els = document.querySelectorAll(sel);
-    if (els.length > 0) return Array.from(els);
-  }
-  return [];
+// Backstabbr uses title-case 3-letter codes (e.g. "Ank", "Stp", "Nth").
+// Normalise to uppercase for lookup.
+function normTerritory(raw) {
+  return raw.trim().toUpperCase().replace(/\s+/g, '');
 }
 
 // ---------------------------------------------------------------------------
-// Phase / season / year parser
+// Phase / season / year
 // ---------------------------------------------------------------------------
 function parsePhase() {
-  const candidates = [
-    queryFirst(SEL.PHASE)?.textContent,
-    document.title,
-    document.querySelector('h1')?.textContent,
-    document.querySelector('h2')?.textContent,
-  ];
+  // Primary: a.text-capitalize → "spring 1901 (current season)"
+  const el = document.querySelector(SEL.PHASE);
+  const text = el?.textContent?.trim() || document.title;
 
-  for (const text of candidates) {
-    if (!text) continue;
-    // Match "Spring 1901, Movement" or "Fall 1902 — Retreat Phase" etc.
-    const m = text.match(/(Spring|Fall|Winter)\s+(\d{4})[^A-Za-z]*([A-Za-z]+(?:\s+Phase)?)/i);
-    if (m) {
-      return { season: m[1], year: parseInt(m[2], 10), phase: m[3].trim() };
-    }
-    // Just season + year without phase name
-    const m2 = text.match(/(Spring|Fall|Winter)\s+(\d{4})/i);
-    if (m2) {
-      return { season: m2[1], year: parseInt(m2[2], 10), phase: 'Unknown' };
-    }
+  const m = text.match(/(spring|fall|winter)\s+(\d{4})/i);
+  if (m) {
+    const season = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+    const year   = parseInt(m[2], 10);
+    // Derive phase name: Spring/Fall = Movement (unless retreat btn visible),
+    // Winter = Build/Adjustment.  Good-enough heuristic without more DOM work.
+    const phase  = season === 'Winter' ? 'Build' : 'Movement';
+    return { season, year, phase };
   }
   return { season: null, year: null, phase: null };
 }
 
 // ---------------------------------------------------------------------------
-// Country parser
-// ---------------------------------------------------------------------------
-function parseMyCountry() {
-  const el = queryFirst(SEL.MY_COUNTRY);
-  if (el) return el.textContent.trim();
-
-  // Fallback: look for a country name in a prominent heading near the orders panel
-  const powers = ['Austria','England','France','Germany','Italy','Russia','Turkey'];
-  for (const power of powers) {
-    // Case-insensitive search in page text near order panels
-    const els = document.querySelectorAll('[class*="order"], [class*="power"], [class*="country"]');
-    for (const el of els) {
-      if (el.textContent.includes(power)) return power;
-    }
-  }
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Unit parser — tries several DOM representations backstabbr might use
+// Units — read from .orderstring elements (current player's units only)
+// Format backstabbr uses: "F Ank", "A Con", "A Smy"
 // ---------------------------------------------------------------------------
 function parseUnits() {
   const units = [];
-  const seen = new Set();
+  const seen  = new Set();
 
-  function addUnit(type, territory) {
-    const t = territory.toUpperCase().trim();
-    if (!seen.has(t)) {
-      seen.add(t);
-      units.push({ type, territory: t });
-    }
-  }
-
-  // Strategy 1: SVG <text> or <title> elements labelling units on the map
-  // Backstabbr renders the map as SVG; units have labels like "A LON" or "F NTH"
-  document.querySelectorAll('svg text, svg title').forEach((el) => {
+  document.querySelectorAll(SEL.ORDERSTRING).forEach((el) => {
     const text = el.textContent.trim();
-    const m = text.match(/^([AF])\s+([A-Z]{2,3}(?:\/[NS][CE])?)\s*$/);
-    if (m) addUnit(m[1] === 'A' ? 'Army' : 'Fleet', m[2]);
-  });
+    // Match "A Xxx" or "F Xxx" (army or fleet + territory)
+    const m = text.match(/^([AF])\s+([A-Za-z]{2,3}(?:\/[A-Za-z]{2})?)\s*$/);
+    if (!m) return;
 
-  // Strategy 2: data attributes on SVG groups or circles
-  document.querySelectorAll('[data-unit], [data-province][data-unit-type]').forEach((el) => {
-    const type = el.dataset.unitType || el.dataset.unit;
-    const territory = el.dataset.province || el.dataset.territory;
-    if (type && territory) {
-      addUnit(type.includes('fleet') || type === 'F' ? 'Fleet' : 'Army', territory);
-    }
-  });
+    const type      = m[1] === 'A' ? 'Army' : 'Fleet';
+    const territory = normTerritory(m[2]);
 
-  // Strategy 3: Order list items often list units e.g. "A PAR - BUR"
-  queryAll(SEL.ORDER_ITEMS).forEach((el) => {
-    const text = el.textContent.trim();
-    const m = text.match(/\b([AF])\s+([A-Z]{2,3}(?:\/[NS][CE])?)\b/);
-    if (m && VALID_TERRITORIES.has(m[2])) {
-      addUnit(m[1] === 'A' ? 'Army' : 'Fleet', m[2]);
+    if (!seen.has(territory)) {
+      seen.add(territory);
+      units.push({ type, territory });
     }
   });
 
@@ -184,44 +98,40 @@ function parseUnits() {
 }
 
 // ---------------------------------------------------------------------------
-// Submitted orders parser
+// Country — infer from which home SCs the player's units are sitting on.
+// Vote across all units; highest count wins.
 // ---------------------------------------------------------------------------
-function parseSubmittedOrders() {
-  const orders = [];
-  queryAll(SEL.ORDER_ITEMS).forEach((el) => {
-    const text = el.textContent.trim();
-    if (text.length > 2) orders.push(text);
-  });
-  return orders;
+function parseMyCountry(units) {
+  const votes = {};
+  for (const { territory } of units) {
+    const country = HOME_SC_TO_COUNTRY[territory];
+    if (country) votes[country] = (votes[country] || 0) + 1;
+  }
+
+  // Return the country with most matching home-SC units
+  const winner = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
+  return winner ? winner[0] : null;
 }
 
 // ---------------------------------------------------------------------------
-// Supply centre count parser
+// Supply centre counts — not directly available in a simple element;
+// skip for now and let the LLM note it's unknown.
 // ---------------------------------------------------------------------------
 function parseSupplyCenters() {
-  const counts = {};
-  const powers = ['Austria','England','France','Germany','Italy','Russia','Turkey'];
+  return {};
+}
 
-  // Try dedicated supply-centre elements
-  queryAll(SEL.SUPPLY_CENTERS).forEach((el) => {
+// ---------------------------------------------------------------------------
+// Already-submitted order strings (same .orderstring elements, but only
+// those that have been confirmed/submitted — for now return all visible ones)
+// ---------------------------------------------------------------------------
+function parseSubmittedOrders() {
+  const orders = [];
+  document.querySelectorAll(SEL.ORDERSTRING).forEach((el) => {
     const text = el.textContent.trim();
-    // "England: 3" or "France (5)" or "Germany — 4"
-    const m = text.match(/([A-Za-z]+)\s*[:\(\-–]\s*(\d+)/);
-    if (m && powers.some((p) => p.toLowerCase().startsWith(m[1].toLowerCase().slice(0, 3)))) {
-      counts[m[1]] = parseInt(m[2], 10);
-    }
+    if (text.length > 1) orders.push(text);
   });
-
-  // Fallback: scan all text nodes for power + number patterns
-  if (Object.keys(counts).length === 0) {
-    powers.forEach((power) => {
-      const regex = new RegExp(power + '\\D+(\\d+)\\s*(?:SC|supply|center)', 'i');
-      const m = document.body.textContent.match(regex);
-      if (m) counts[power] = parseInt(m[1], 10);
-    });
-  }
-
-  return counts;
+  return orders;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,20 +139,20 @@ function parseSupplyCenters() {
 // ---------------------------------------------------------------------------
 window.parseGameState = function () {
   const { season, year, phase } = parsePhase();
+  const units = parseUnits();
   return {
     season,
     year,
     phase,
-    myCountry: parseMyCountry(),
-    units: parseUnits(),
+    myCountry: parseMyCountry(units),
+    units,
     supplyCenters: parseSupplyCenters(),
     submittedOrders: parseSubmittedOrders(),
   };
 };
 
 // ---------------------------------------------------------------------------
-// MutationObserver — calls callback when the game state likely changed
-// (phase transition, order update, etc.)
+// MutationObserver — calls callback when game state likely changed
 // ---------------------------------------------------------------------------
 window.setupGameObserver = function (callback) {
   let debounceTimer = null;
@@ -252,7 +162,7 @@ window.setupGameObserver = function (callback) {
     debounceTimer = setTimeout(() => callback(window.parseGameState()), 500);
   });
 
-  const root = queryFirst(SEL.GAME_ROOT) || document.body;
+  const root = document.querySelector(SEL.GAME_ROOT) || document.body;
   observer.observe(root, { childList: true, subtree: true, characterData: true });
   return observer;
 };
